@@ -2,7 +2,7 @@ name: Deriv Signal Checker
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '5,20,35,50 * * * *'  # Runs at :05, :20, :35, :50 past the hour
   workflow_dispatch:
 
 jobs:
