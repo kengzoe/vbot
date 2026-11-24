@@ -1,4 +1,5 @@
 import asyncio, json, os, logging, time
+from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import websockets
@@ -32,7 +33,6 @@ def atr(df, p):
     tr = pd.concat([df["high"]-df["low"], (df["high"]-pc).abs(), (df["low"]-pc).abs()], axis=1).max(axis=1)
     return tr.ewm(alpha=1/p, adjust=False).mean()
 
-
 def detect_swings(df, window=SWING_WINDOW):
     if len(df) < window * 2 + 1: return []
     highs, lows = df["high"].values, df["low"].values
@@ -43,7 +43,6 @@ def detect_swings(df, window=SWING_WINDOW):
         if lows[i] == min(lows[i-window:i+window+1]) and lows[i] < lows[i-1]:
             out.append({"idx": i, "type": -1, "price": float(lows[i]), "confirmed_at": i + window})
     return out
-
 
 def compute_h1_bias(h1, swings):
     n = len(h1); bias = np.zeros(n, dtype=int)
@@ -67,7 +66,6 @@ def compute_h1_bias(h1, swings):
         elif cur == -1: ims[i], ime[i] = bear
     return pd.DataFrame({"epoch": h1["epoch"].values, "bias": bias, "imp_s": ims, "imp_e": ime})
 
-
 def detect_obs(df, swings):
     obs = []
     closes = df["close"].values
@@ -83,7 +81,6 @@ def detect_obs(df, swings):
             obs.append({"type": "bear", "low": zl, "high": zh, "formed_at": bp - 1})
     return obs
 
-
 def detect_fvgs(df):
     fvgs = []
     highs, lows = df["high"].values, df["low"].values
@@ -93,7 +90,6 @@ def detect_fvgs(df):
         elif highs[i] < lows[i-2]:
             fvgs.append({"type": "bear", "low": float(highs[i]), "high": float(lows[i-2]), "formed_at": i})
     return fvgs
-
 
 def classify_pa(o, h, l, c, po, pc, ph, pl):
     body = abs(c - o); rng = h - l
@@ -112,7 +108,6 @@ def classify_pa(o, h, l, c, po, pc, ph, pl):
     if br < 0.15: return 0.3
     return 0.0
 
-
 def fib_zone_score(close, imp_s, imp_e, direction):
     if direction == 1:
         lo, hi = imp_s, imp_e; rng = hi - lo
@@ -126,7 +121,6 @@ def fib_zone_score(close, imp_s, imp_e, direction):
     if FIB_SHALLOW <= ret < FIB_LOW: return 0.75, zl, zh
     return 0.0, zl, zh
 
-
 def check_structure(swings, direction, idx):
     confirmed = [s for s in swings if s["confirmed_at"] <= idx]
     highs = sorted([s for s in confirmed if s["type"] == 1], key=lambda s: s["confirmed_at"])
@@ -137,12 +131,10 @@ def check_structure(swings, direction, idx):
     if direction == 1: return rh > ph and rl > pl
     return rh < ph and rl < pl
 
-
 def compute_mtf(idx, direction, m15_swings, m5_swings):
     hits = sum([check_structure(m15_swings, direction, idx),
                 check_structure(m5_swings, direction, idx)])
     return 1.0 if hits == 2 else 0.5 if hits == 1 else 0.0
-
 
 def compute_snr(idx, low, high, direction, obs, fvgs, m15_swings, atr_val):
     mid = (low + high) / 2
@@ -167,37 +159,21 @@ def compute_snr(idx, low, high, direction, obs, fvgs, m15_swings, atr_val):
                 best = 0.5; break
     return best
 
-
 def get_grade(total_score):
-    if total_score >= GRADE_THRESHOLDS["A+"]:
-        return "A+"
-    elif total_score >= GRADE_THRESHOLDS["A"]:
-        return "A"
-    elif total_score >= GRADE_THRESHOLDS["B"]:
-        return "B"
-    elif total_score >= GRADE_THRESHOLDS["C"]:
-        return "C"
-    else:
-        return "D"
-
+    if total_score >= GRADE_THRESHOLDS["A+"]: return "A+"
+    elif total_score >= GRADE_THRESHOLDS["A"]: return "A"
+    elif total_score >= GRADE_THRESHOLDS["B"]: return "B"
+    elif total_score >= GRADE_THRESHOLDS["C"]: return "C"
+    else: return "D"
 
 def evaluate_signal(h1, m15, m5):
-    """Evaluate the LAST closed M15 candle for a signal. Returns signal dict or None."""
-    if len(h1) < 200 or len(m15) < 100 or len(m5) < 200:
-        return None
-    
-    # Use all but the last (currently forming) candle
+    if len(h1) < 200 or len(m15) < 100 or len(m5) < 200: return None
     m15_closed = m15.iloc[:-1].copy().reset_index(drop=True)
     m5_closed = m5.iloc[:-1].copy().reset_index(drop=True)
-    
     idx = len(m15_closed) - 1
-    if idx < max(60, SWING_WINDOW + 5):
-        return None
-    
+    if idx < max(60, SWING_WINDOW + 5): return None
     row = m15_closed.iloc[idx]
     prev = m15_closed.iloc[idx - 1]
-    
-    # Compute all structure
     h1_sw = detect_swings(h1)
     h1_bias = compute_h1_bias(h1, h1_sw)
     m15_sw = detect_swings(m15_closed)
@@ -205,76 +181,48 @@ def evaluate_signal(h1, m15, m5):
     obs = detect_obs(m15_closed, m15_sw)
     fvgs = detect_fvgs(m15_closed)
     m15_atr = atr(m15_closed, ATR_PERIOD)
-    
-    # Get H1 bias for this candle
     epoch = int(row["epoch"])
     hep = h1_bias["epoch"].values
     hi = np.searchsorted(hep, epoch, side="right") - 1
     if hi < 0: return None
     h1r = h1_bias.iloc[hi]
-    if h1r["bias"] == 0 or np.isnan(h1r["imp_s"]) or np.isnan(h1r["imp_e"]):
-        return None
-    
+    if h1r["bias"] == 0 or np.isnan(h1r["imp_s"]) or np.isnan(h1r["imp_e"]): return None
     direction = int(h1r["bias"])
     imp_s, imp_e = float(h1r["imp_s"]), float(h1r["imp_e"])
-    
-    # V2.2 scoring (No-Fib)
     fib_score, zl, zh = fib_zone_score(float(row["close"]), imp_s, imp_e, direction)
-    
     pa_score = classify_pa(float(row["open"]), float(row["high"]), float(row["low"]),
                             float(row["close"]), float(prev["open"]), float(prev["close"]),
                             float(prev["high"]), float(prev["low"]))
-    if pa_score < 0.6: return None  # Hard filter
-    
+    if pa_score < 0.6: return None
     mtf_score = compute_mtf(idx, direction, m15_sw, m5_sw)
     cur_atr = float(m15_atr.iloc[idx])
     if np.isnan(cur_atr) or cur_atr == 0: return None
-    
     snr_score = compute_snr(idx, zl, zh, direction, obs, fvgs, m15_sw, cur_atr)
-    if snr_score < 0.5: return None  # Hard filter
-    
-    total = mtf_score + pa_score + snr_score  # V2.2: No-Fib scoring
+    if snr_score < 0.5: return None
+    total = mtf_score + pa_score + snr_score
     grade = get_grade(total)
-    
-    if grade == "D":
-        return None
-    
-    # Calculate trade levels
+    if grade == "D": return None
     entry = float(row["close"])
     if direction == 1:
         stop = min(zl, float(row["low"])) - cur_atr * 0.1
     else:
         stop = max(zh, float(row["high"])) + cur_atr * 0.1
-    
     risk = abs(entry - stop)
     raw_target_dist = abs(imp_e - entry)
     max_target_dist = cur_atr * 3.0
     effective_target_dist = min(raw_target_dist, max_target_dist)
-    
-    if effective_target_dist < risk:
-        return None
-    
+    if effective_target_dist < risk: return None
     if direction == 1:
         target_1 = entry + risk
         target_final = entry + effective_target_dist
     else:
         target_1 = entry - risk
         target_final = entry - effective_target_dist
-    
     return {
-        "grade": grade,
-        "direction": direction,
-        "entry": entry,
-        "stop": stop,
-        "tp1": target_1,
-        "tp2": target_final,
-        "risk_pct": (risk / entry) * 100,
-        "rr_ratio": effective_target_dist / risk,
-        "score_total": total,
-        "score_mtf": mtf_score,
-        "score_pa": pa_score,
-        "score_snr": snr_score,
-        "atr": cur_atr,
+        "grade": grade, "direction": direction, "entry": entry, "stop": stop,
+        "tp1": target_1, "tp2": target_final, "risk_pct": (risk / entry) * 100,
+        "rr_ratio": effective_target_dist / risk, "score_total": total,
+        "score_mtf": mtf_score, "score_pa": pa_score, "score_snr": snr_score, "atr": cur_atr,
     }
 
 
@@ -312,29 +260,25 @@ async def fetch(symbol, gran, total):
 
 
 # ============================================================
-# MAIN CHECK FUNCTION
+# TELEGRAM SENDER & HEARTBEAT
 # ============================================================
 
-async def check_all_symbols():
-    logging.info("🔍 Starting 15-minute signal check...")
-    async with aiohttp.ClientSession() as session:
-        for symbol in SYMBOLS:
-            logging.info(f"Checking {symbol}...")
-            h1 = await fetch(symbol, H1_GRAN, 500)
-            m15 = await fetch(symbol, M15_GRAN, 500)
-            m5 = await fetch(symbol, M5_GRAN, 500)
-            
-            if h1.empty or m15.empty or m5.empty:
-                logging.warning(f"  ⚠️ Failed to fetch data for {symbol}")
-                continue
-                
-            signal = evaluate_signal(h1, m15, m5)
-            if signal:
-                await send_signal(symbol, signal, session)
+async def send_message(text, session):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    try:
+        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status == 200:
+                logging.info("📤 Telegram message sent successfully.")
             else:
-                logging.info(f"  ✅ No signal for {symbol}")
-    logging.info("✅ Check complete. Exiting.")
-
+                logging.error(f"Failed to send Telegram: {resp.status}")
+    except Exception as e:
+        logging.error(f"Telegram error: {e}")
 
 async def send_signal(symbol, signal, session):
     direction = "🟢 BUY" if signal["direction"] == 1 else "🔴 SELL"
@@ -361,35 +305,58 @@ async def send_signal(symbol, signal, session):
         f"• ATR: <code>{signal['atr']:.5g}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<b>🧠 Score Breakdown:</b>\n"
-        f"• MTF: {signal['score_mtf']:.2f}\n"
-        f"• PA:  {signal['score_pa']:.2f}\n"
-        f"• SNR: {signal['score_snr']:.2f}\n"
+        f"• MTF: {signal['score_mtf']:.2f} | PA: {signal['score_pa']:.2f} | SNR: {signal['score_snr']:.2f}\n"
         f"• <b>Total: {signal['score_total']:.2f} ({grade})</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Serverless V2.2 | {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}</i>"
+        f"<i>Serverless V2.2 | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>"
     )
+    await send_message(msg, session)
+
+async def send_heartbeat(session):
+    msg = (
+        f"💚 <b>Daily Bot Heartbeat</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Bot is alive and running!\n"
+        f"📡 Monitoring: {', '.join(SYMBOLS)}\n"
+        f"⏰ Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Next check in 15 minutes...</i>"
+    )
+    await send_message(msg, session)
+
+
+# ============================================================
+# MAIN CHECK FUNCTION
+# ============================================================
+
+async def check_all_symbols():
+    logging.info("🔍 Starting 15-minute signal check...")
     
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": msg,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    
-    try:
-        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200:
-                logging.info(f"📤 {grade} signal sent for {symbol}!")
+    # Check if it's the first 15-minute window of the day (00:00 - 00:14 UTC)
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.hour == 0 and now_utc.minute < 15:
+        logging.info("🕛 Midnight UTC window detected. Sending daily heartbeat...")
+        async with aiohttp.ClientSession() as session:
+            await send_heartbeat(session)
+
+    async with aiohttp.ClientSession() as session:
+        for symbol in SYMBOLS:
+            logging.info(f"Checking {symbol}...")
+            h1 = await fetch(symbol, H1_GRAN, 500)
+            m15 = await fetch(symbol, M15_GRAN, 500)
+            m5 = await fetch(symbol, M5_GRAN, 500)
+            
+            if h1.empty or m15.empty or m5.empty:
+                logging.warning(f"  ⚠️ Failed to fetch data for {symbol}")
+                continue
+                
+            signal = evaluate_signal(h1, m15, m5)
+            if signal:
+                await send_signal(symbol, signal, session)
             else:
-                logging.error(f"Failed to send Telegram: {resp.status}")
-    except Exception as e:
-        logging.error(f"Telegram error: {e}")
+                logging.info(f"  ✅ No signal for {symbol}")
+    logging.info("✅ Check complete. Exiting.")
 
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 
 if __name__ == "__main__":
     asyncio.run(check_all_symbols())
