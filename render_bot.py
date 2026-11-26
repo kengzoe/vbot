@@ -16,6 +16,22 @@ ENDPOINT = "wss://api.derivws.com/trading/v1/options/ws/public?app_id=1089"
 H1_GRAN, M15_GRAN, M5_GRAN = 3600, 900, 300
 SYMBOLS = ["R_50", "R_100", "1HZ75V", "stpRNG5", "R_75", "stpRNG4", "1HZ25V"]
 
+# Map API symbols to their official Deriv names
+SYMBOL_NAMES = {
+    "R_50": "Volatility 50 Index",
+    "R_100": "Volatility 100 Index",
+    "1HZ75V": "Volatility 75 (1s) Index",
+    "stpRNG5": "Step Index 500",
+    "R_10": "Volatility 10 Index",
+    "R_25": "Volatility 25 Index",
+    "R_75": "Volatility 75 Index",
+    "stpRNG": "Step Index",
+    "1HZ10V": "Volatility 10 (1s) Index",
+    "1HZ25V": "Volatility 25 (1s) Index",
+    "1HZ50V": "Volatility 50 (1s) Index",
+    "1HZ100V": "Volatility 100 (1s) Index"
+}
+
 COST_PCT = 0.03
 SWING_WINDOW = 5
 FIB_LOW, FIB_HIGH = 0.50, 0.786
@@ -271,27 +287,38 @@ async def send_message(text, session):
 
 async def send_signal(symbol, signal, session):
     global daily_counts
+    # Increment the daily counter for this grade
     grade = signal["grade"]
     if grade in daily_counts:
         daily_counts[grade] += 1
 
-    direction = "🟢 BUY" if signal["direction"] == 1 else "🔴 SELL"
+    # Get the real name, fallback to API symbol if missing
+    real_name = SYMBOL_NAMES.get(symbol, symbol)
+    
+    # Format direction and grade
+    direction_text = "🟢 LONG / BUY" if signal["direction"] == 1 else "🔴 SHORT / SELL"
     grade_emoji = {"A+": "🏆", "A": "⭐", "B": "✅", "C": "📊"}.get(grade, "📊")
+    grade_label = {"A+": "ELITE", "A": "HIGH", "B": "STANDARD", "C": "SPECULATIVE"}.get(grade, "")
+    
+    # Build the stylish HTML message
     msg = (
-        f"{grade_emoji} <b>{grade} SIGNAL DETECTED</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Symbol:</b> <code>{symbol}</code>\n"
-        f"<b>Direction:</b> {direction}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>📍 Entry:</b> <code>{signal['entry']:.5g}</code>\n"
-        f"<b>🛑 Stop Loss:</b> <code>{signal['stop']:.5g}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>🎯 TP1:</b> <code>{signal['tp1']:.5g}</code>\n"
-        f"<b>🎯 TP2:</b> <code>{signal['tp2']:.5g}</code>\n"
-        f"<i>V2.2 Render Bot | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{grade_emoji} <b>GRADE: {grade} ({grade_label})</b>\n"
+        f"📈 <b>{real_name}</b> <code>({symbol})</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{direction_text}\n"
+        f"📍 <b>Entry:</b> <code>{signal['entry']:.5g}</code>\n"
+        f"🛑 <b>Stop Loss:</b> <code>{signal['stop']:.5g}</code> <i>(Risk: {signal['risk_pct']:.2f}%)</i>\n\n"
+        f"🎯 <b>Take Profit 1:</b> <code>{signal['tp1']:.5g}</code> <i>(50% Close)</i>\n"
+        f"🎯 <b>Take Profit 2:</b> <code>{signal['tp2']:.5g}</code> <i>(Runner)</i>\n"
+        f"⚖️ <b>Risk/Reward:</b> 1 : {signal['rr_ratio']:.2f}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🧠 <b>Confluence Score:</b> {signal['score_total']:.2f}\n"
+        f"📊 <i>MTF: {signal['score_mtf']:.1f} | PA: {signal['score_pa']:.1f} | SNR: {signal['score_snr']:.1f}</i>\n"
+        f"⏱️ <i>Detected: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>"
     )
+    
     await send_message(msg, session)
-
 async def send_daily_journal(session):
     global daily_counts, last_summary_date
     
