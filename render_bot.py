@@ -1,5 +1,5 @@
 import asyncio, json, os, logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 import numpy as np
 import pandas as pd
 import websockets
@@ -14,7 +14,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
 
 ENDPOINT = "wss://api.derivws.com/trading/v1/options/ws/public?app_id=1089"
 H1_GRAN, M15_GRAN, M5_GRAN = 3600, 900, 300
-SYMBOLS = ["R_50", "R_100", "1HZ75V", "stpRNG5"]
+SYMBOLS = ["R_50", "R_100", "1HZ75V", "stpRNG5", "R_75", "stpRNG4", "1HZ25V"]
 
 COST_PCT = 0.03
 SWING_WINDOW = 5
@@ -24,6 +24,13 @@ ATR_PERIOD = 14
 GRADE_THRESHOLDS = {"A+": 2.4, "A": 2.1, "B": 1.8, "C": 1.5}
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+# ============================================================
+# DAILY JOURNAL TRACKER
+# ============================================================
+daily_counts = {"A+": 0, "A": 0, "B": 0, "C": 0}
+# FIX: Strictly use UTC date to prevent timezone mismatch bugs
+last_summary_date = datetime.now(timezone.utc).date() 
 
 # ============================================================
 # STRATEGY HELPER FUNCTIONS (V2.2 Logic)
@@ -263,8 +270,12 @@ async def send_message(text, session):
         logging.error(f"Telegram error: {e}")
 
 async def send_signal(symbol, signal, session):
-    direction = "🟢 BUY" if signal["direction"] == 1 else "🔴 SELL"
+    global daily_counts
     grade = signal["grade"]
+    if grade in daily_counts:
+        daily_counts[grade] += 1
+
+    direction = "🟢 BUY" if signal["direction"] == 1 else "🔴 SELL"
     grade_emoji = {"A+": "🏆", "A": "⭐", "B": "✅", "C": "📊"}.get(grade, "📊")
     msg = (
         f"{grade_emoji} <b>{grade} SIGNAL DETECTED</b>\n"
@@ -281,9 +292,31 @@ async def send_signal(symbol, signal, session):
     )
     await send_message(msg, session)
 
-async def send_heartbeat(session):
-    msg = f"💚 <b>Daily Bot Heartbeat</b>\n✅ Bot is alive on Render!\n📡 Monitoring: {', '.join(SYMBOLS)}\n⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+async def send_daily_journal(session):
+    global daily_counts, last_summary_date
+    
+    total_signals = sum(daily_counts.values())
+    today_str = last_summary_date.strftime("%Y-%m-%d")
+    
+    msg = (
+        f"📊 <b>Daily Market Journal</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 <b>Date:</b> {today_str}\n"
+        f"🎯 <b>Total Setups Found:</b> {total_signals}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏆 <b>A+ Signals:</b> {daily_counts['A+']}\n"
+        f"⭐ <b>A Signals:</b> {daily_counts['A']}\n"
+        f"✅ <b>B Signals:</b> {daily_counts['B']}\n"
+        f"📊 <b>C Signals:</b> {daily_counts['C']}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Review your Telegram history to check trade outcomes.</i>\n"
+        f"<i>Bot is alive and scanning...</i>"
+    )
     await send_message(msg, session)
+    
+    # FIX: Reset using strict UTC date
+    daily_counts = {"A+": 0, "A": 0, "B": 0, "C": 0}
+    last_summary_date = datetime.now(timezone.utc).date()
 
 # ============================================================
 # BACKGROUND TRADING TASK
@@ -293,9 +326,13 @@ async def run_trading_loop():
     while True:
         try:
             now_utc = datetime.now(timezone.utc)
-            if now_utc.hour == 0 and now_utc.minute < 15:
+            current_date = now_utc.date()
+            
+            # Check if it's a new day (runs between 00:00 and 00:14 UTC)
+            if now_utc.hour == 0 and now_utc.minute < 15 and current_date != last_summary_date:
+                logging.info("🕛 Midnight UTC reached. Sending Daily Journal...")
                 async with aiohttp.ClientSession() as session:
-                    await send_heartbeat(session)
+                    await send_daily_journal(session)
 
             async with aiohttp.ClientSession() as session:
                 for symbol in SYMBOLS:
