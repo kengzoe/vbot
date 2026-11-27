@@ -210,47 +210,70 @@ async def send_message(text, session):
     except Exception as e:
         logging.error(f"Telegram error: {e}")
 
+from datetime import datetime, timezone
+
+# --- Triple Checked Small Caps Converter ---
+SMALL_CAPS_MAP = str.maketrans(
+    "abcdefghijklmnopqrstuvwxyz",
+    "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘqʀꜱᴛᴜᴠᴡxʏᴢ"
+)
+
+def to_small_caps(text: str) -> str:
+    return text.lower().translate(SMALL_CAPS_MAP)
+
+# --- Triple Checked Signal Function ---
 async def send_signal(symbol, signal, session):
     global daily_counts
     grade = signal["grade"]
     if grade in daily_counts: daily_counts[grade] += 1
 
-    direction_text = "🟢 LONG / BUY" if signal["direction"] == 1 else "🔴 SHORT / SELL"
+    direction_text = "🟢 ʟᴏɴɢ / ʙᴜʏ" if signal["direction"] == 1 else "🔴 ꜱʜᴏʀᴛ / ꜱᴇʟʟ"
     grade_emoji = {"A+": "🏆", "A": "⭐", "B": "✅", "C": "📊"}.get(grade, "📊")
-    grade_label = {"A+": "ELITE", "A": "HIGH", "B": "STANDARD", "C": "SPECULATIVE"}.get(grade, "")
+    grade_label = {"A+": "ᴇʟɪᴛᴇ", "A": "ʜɪɢʜ", "B": "ꜱᴛᴀɴᴅᴀʀᴅ", "C": "ꜱᴘᴇᴄᴜʟᴀᴛɪᴠᴇ"}.get(grade, "")
+    
+    lbl_grade = to_small_caps("GRADE")
+    lbl_entry = to_small_caps("ENTRY")
+    lbl_sl = to_small_caps("STOP LOSS")
+    lbl_tp1 = to_small_caps("TAKE PROFIT 1")
+    lbl_tp2 = to_small_caps("TAKE PROFIT 2")
+    lbl_rr = to_small_caps("RISK/REWARD")
+    lbl_score = to_small_caps("CONFLUENCE SCORE")
     
     msg = (
-        f"🚨 <b>V3.2 MEAN REVERSION SETUP</b> 🚨\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{grade_emoji} <b>GRADE: {grade} ({grade_label})</b>\n"
+        f"{grade_emoji} <b>{lbl_grade}: {grade} ({grade_label})</b>\n"
         f"📈 <b>Volatility 25 Index</b> <code>(R_25)</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{direction_text}\n"
-        f"📍 <b>Entry:</b> <code>{signal['entry']:.5g}</code>\n"
-        f"🛑 <b>Stop Loss:</b> <code>{signal['stop']:.5g}</code> <i>(Risk: {signal['risk_pct']:.2f}%)</i>\n\n"
-        f"🎯 <b>Take Profit 1:</b> <code>{signal['tp1']:.5g}</code> <i>(50% Close)</i>\n"
-        f"🎯 <b>Take Profit 2:</b> <code>{signal['tp2']:.5g}</code> <i>(Runner)</i>\n"
-        f"⚖️ <b>Risk/Reward:</b> 1 : {signal['rr_ratio']:.2f}\n\n"
+        f"📍 <b>{lbl_entry}:</b> <code>{signal['entry']:.5g}</code>\n"
+        f"🛑 <b>{lbl_sl}:</b> <code>{signal['stop']:.5g}</code> <i>(Risk: {signal['risk_pct']:.2f}%)</i>\n\n"
+        f"🎯 <b>{lbl_tp1}:</b> <code>{signal['tp1']:.5g}</code> <i>(50% Close)</i>\n"
+        f"🎯 <b>{lbl_tp2}:</b> <code>{signal['tp2']:.5g}</code> <i>(Runner)</i>\n"
+        f"⚖️ <b>{lbl_rr}:</b> 1 : {signal['rr_ratio']:.2f}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🧠 <b>Confluence Score:</b> {signal['score_total']:.2f}\n"
-        f"📊 <i>BB: {signal['score_bb']:.1f} | PA: {signal['score_pa']:.1f} | SNR: {signal['score_snr']:.1f}</i>\n"
-        f"⏱️ <i>Detected: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>"
     )
     await send_message(msg, session)
 
+# --- Triple Checked Daily Journal Function ---
 async def send_daily_journal(session):
     global daily_counts, last_summary_date
     total_signals = sum(daily_counts.values())
+    
+    lbl_title = to_small_caps("R_25 Daily Journal")
+    lbl_date = to_small_caps("Date")
+    lbl_setups = to_small_caps("Total Setups")
+    lbl_bot = to_small_caps("V3.2 Mean Reversion")
+    
     msg = (
-        f"📊 <b>R_25 Daily Journal</b>\n"
+        f"📊 <b>{lbl_title}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📅 <b>Date:</b> {last_summary_date.strftime('%Y-%m-%d')}\n"
-        f"🎯 <b>Total Setups:</b> {total_signals}\n"
+        f"📅 <b>{lbl_date}:</b> {last_summary_date.strftime('%Y-%m-%d')}\n"
+        f"🎯 <b>{lbl_setups}:</b> {total_signals}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🏆 A+: {daily_counts['A+']} | ⭐ A: {daily_counts['A']}\n"
         f"✅ B: {daily_counts['B']} | 📊 C: {daily_counts['C']}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>V3.2 Mean Reversion Bot</i>"
+        f"<i>{lbl_bot}</i>"
     )
     await send_message(msg, session)
     daily_counts = {"A+": 0, "A": 0, "B": 0, "C": 0}
