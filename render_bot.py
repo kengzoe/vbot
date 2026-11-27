@@ -297,9 +297,13 @@ async def send_message(text, session):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     try:
         async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200: logging.info("📤 Telegram message sent.")
+            body = await resp.text()
+            if resp.status == 200:
+                logging.info("📤 Telegram message sent.")
+            else:
+                logging.error(f"❌ Telegram send failed: {resp.status} {body}")
     except Exception as e:
-        logging.error(f"Telegram error: {e}")
+        logging.error(f"Telegram error: {e}", exc_info=True)
         
 from datetime import datetime, timezone
 
@@ -345,11 +349,11 @@ async def send_signal(symbol, signal, session):
         f"⚖️ <b>{lbl_rr}:</b> 1 : {signal['rr_ratio']:.2f}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     )
-    # await session.send_message(chat_id, msg, parse_mode="HTML")
+    await send_message(msg, session)
 
 
 # --- Updated Daily Journal Function ---
-async def send_daily_journal(session, chat_id):
+async def send_daily_journal(session):
     global daily_counts
     
     # 1. Apply small caps to the main heading and labels
@@ -382,11 +386,12 @@ async def send_daily_journal(session, chat_id):
     )
 
     # Send the message
-    # await session.send_message(chat_id, msg, parse_mode="HTML")
+    await send_message(msg, session)
 # ============================================================
 # BACKGROUND TRADING TASK
 # ============================================================
 async def run_trading_loop():
+    global last_summary_date
     logging.info("🚀 Trading loop started. Checking every 15 minutes.")
     while True:
         try:
@@ -398,6 +403,7 @@ async def run_trading_loop():
                 logging.info("🕛 Midnight UTC reached. Sending Daily Journal...")
                 async with aiohttp.ClientSession() as session:
                     await send_daily_journal(session)
+                last_summary_date = current_date
 
             async with aiohttp.ClientSession() as session:
                 for symbol in SYMBOLS:
@@ -405,13 +411,13 @@ async def run_trading_loop():
                     m15 = await fetch(symbol, M15_GRAN, 500)
                     m5 = await fetch(symbol, M5_GRAN, 500)
                     if h1.empty or m15.empty or m5.empty: continue
-                    signal = evaluate_signal(h1, m15, m5)
+                    signal = evaluate_symbol(symbol, h1, m15, m5)
                     if signal:
                         await send_signal(symbol, signal, session)
                     else:
                         logging.info(f"✅ No signal for {symbol}")
         except Exception as e:
-            logging.error(f"Trading loop error: {e}")
+            logging.error(f"Trading loop error: {e}", exc_info=True)
         
         logging.info("💤 Sleeping for 15 minutes...")
         await asyncio.sleep(900)
