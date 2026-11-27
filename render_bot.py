@@ -32,6 +32,15 @@ SYMBOL_NAMES = {
     "1HZ100V": "Volatility 100 (1s) Index"
 }
 
+# Custom parameters for each symbol based on backtest optimization
+SYMBOL_PARAMS = {
+    "R_50": {"target_cap": 3.0, "stop_buffer": 0.1},
+    "R_100": {"target_cap": 3.0, "stop_buffer": 0.1},
+    "1HZ75V": {"target_cap": 3.0, "stop_buffer": 0.1},
+    "stpRNG5": {"target_cap": 3.0, "stop_buffer": 0.1},
+    "R_75": {"target_cap": 4.0, "stop_buffer": 0.2}, # Optimized for R_75
+}
+
 COST_PCT = 0.03
 SWING_WINDOW = 5
 FIB_LOW, FIB_HIGH = 0.50, 0.786
@@ -189,7 +198,7 @@ def get_grade(total_score):
     elif total_score >= GRADE_THRESHOLDS["C"]: return "C"
     else: return "D"
 
-def evaluate_signal(h1, m15, m5):
+def evaluate_symbol(symbol, h1, m15, m5):
     if len(h1) < 200 or len(m15) < 100 or len(m5) < 200: return None
     m15_closed = m15.iloc[:-1].copy().reset_index(drop=True)
     m5_closed = m5.iloc[:-1].copy().reset_index(drop=True)
@@ -225,14 +234,20 @@ def evaluate_signal(h1, m15, m5):
     total = mtf_score + pa_score + snr_score
     grade = get_grade(total)
     if grade == "D": return None
+        # Get custom parameters for this specific symbol
+    params = SYMBOL_PARAMS.get(symbol, {"target_cap": 3.0, "stop_buffer": 0.1})
+    stop_buffer = params["stop_buffer"]
+    target_cap = params["target_cap"]
+
     entry = float(row["close"])
     if direction == 1:
-        stop = min(zl, float(row["low"])) - cur_atr * 0.1
+        stop = min(zl, float(row["low"])) - (cur_atr * stop_buffer)
     else:
-        stop = max(zh, float(row["high"])) + cur_atr * 0.1
+        stop = max(zh, float(row["high"])) + (cur_atr * stop_buffer)
+    
     risk = abs(entry - stop)
     raw_target_dist = abs(imp_e - entry)
-    max_target_dist = cur_atr * 3.0
+    max_target_dist = cur_atr * target_cap
     effective_target_dist = min(raw_target_dist, max_target_dist)
     if effective_target_dist < risk: return None
     if direction == 1:
