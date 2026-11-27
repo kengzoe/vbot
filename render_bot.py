@@ -14,7 +14,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
 
 ENDPOINT = "wss://api.derivws.com/trading/v1/options/ws/public?app_id=1089"
 H1_GRAN, M15_GRAN, M5_GRAN = 3600, 900, 300
-SYMBOLS = ["R_50", "R_100", "1HZ75V", "stpRNG5", "R_75", "stpRNG4", "1HZ25V"]
+SYMBOLS = ["R_50", "R_100", "1HZ75V", "stpRNG5", "R_75", "stpRNG4", "1HZ25V", "1HZ30V"]
 
 # Map API symbols to their official Deriv names
 SYMBOL_NAMES = {
@@ -29,7 +29,8 @@ SYMBOL_NAMES = {
     "1HZ10V": "Volatility 10 (1s) Index",
     "1HZ25V": "Volatility 25 (1s) Index",
     "1HZ50V": "Volatility 50 (1s) Index",
-    "1HZ100V": "Volatility 100 (1s) Index"
+    "1HZ100V": "Volatility 100 (1s) Index",
+    "1HZ30V": "Volatility 30 (1s) Index"
 }
 
 # Custom parameters for each symbol based on backtest optimization
