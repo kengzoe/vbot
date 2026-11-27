@@ -199,7 +199,7 @@ def get_grade(total_score):
     elif total_score >= GRADE_THRESHOLDS["C"]: return "C"
     else: return "D"
 
-def evaluate_symbol(symbol, h1, m15, m5):
+def evaluate_signal(h1, m15, m5):
     if len(h1) < 200 or len(m15) < 100 or len(m5) < 200: return None
     m15_closed = m15.iloc[:-1].copy().reset_index(drop=True)
     m5_closed = m5.iloc[:-1].copy().reset_index(drop=True)
