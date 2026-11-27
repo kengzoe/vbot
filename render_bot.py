@@ -58,6 +58,14 @@ daily_counts = {"A+": 0, "A": 0, "B": 0, "C": 0}
 # FIX: Strictly use UTC date to prevent timezone mismatch bugs
 last_summary_date = datetime.now(timezone.utc).date() 
 
+# Track the last M15 candle epoch we sent a signal for, per symbol.
+# Prevents re-alerting the SAME closed candle after the 15-minute loop wakes up.
+last_signal_epoch = {}
+
+# Track live/open signals so we can alert on TP1 / TP2 / SL hits.
+# Structure: { symbol: {"signal": dict, "entry_epoch": int, "tp1_done": bool, "tp2_done": bool, "created_at": datetime} }
+active_signals = {}
+
 # ============================================================
 # STRATEGY HELPER FUNCTIONS (V2.2 Logic)
 # ============================================================
@@ -258,6 +266,7 @@ def evaluate_symbol(symbol, h1, m15, m5):
         target_1 = entry - risk
         target_final = entry - effective_target_dist
     return {
+        "epoch": epoch,
         "grade": grade, "direction": direction, "entry": entry, "stop": stop,
         "tp1": target_1, "tp2": target_final, "risk_pct": (risk / entry) * 100,
         "rr_ratio": effective_target_dist / risk, "score_total": total,
@@ -387,11 +396,138 @@ async def send_daily_journal(session):
 
     # Send the message
     await send_message(msg, session)
+
+
+# ============================================================
+# OUTCOME ALERTS (TP1 / TP2 / SL HIT)
+# ============================================================
+async def send_outcome_message(symbol, sig, event, session):
+    """Send a Telegram update when a previously-sent signal hits TP1 / TP2 / SL."""
+    real_name = SYMBOL_NAMES.get(symbol, symbol)
+    direction_text = "🟢 ʟᴏɴɢ / ʙᴜʏ" if sig["direction"] == 1 else "🔴 ꜱʜᴏʀᴛ / ꜱᴇʟʟ"
+    entry = sig["entry"]
+
+    if event == "tp1":
+        title = "🎯 " + to_small_caps("TAKE PROFIT 1 HIT")
+        price_line = f"✅ <b>{to_small_caps('TP1')}:</b> <code>{sig['tp1']:.5g}</code>"
+        footer = "💡 " + to_small_caps("50% closed · move SL to breakeven")
+    elif event == "tp2":
+        title = "🏆 " + to_small_caps("TAKE PROFIT 2 HIT · TRADE CLOSED")
+        price_line = f"🎯 <b>{to_small_caps('TP2')}:</b> <code>{sig['tp2']:.5g}</code> ✅"
+        footer = "🏆 " + to_small_caps(f"full target reached · R/R 1 : {sig['rr_ratio']:.2f}")
+    elif event == "sl_after_tp1":
+        title = "⚖️ " + to_small_caps("STOPPED AFTER TP1")
+        price_line = f"🛑 <b>{to_small_caps('SL')}:</b> <code>{sig['stop']:.5g}</code>"
+        footer = "🛡️ " + to_small_caps("tp1 banked · remainder closed at BE")
+    else:  # "sl"
+        title = "🛑 " + to_small_caps("STOP LOSS HIT")
+        price_line = f"❌ <b>{to_small_caps('SL')}:</b> <code>{sig['stop']:.5g}</code>"
+        footer = "💼 " + to_small_caps(f"trade closed · risk {sig['risk_pct']:.2f}%")
+
+    msg = (
+        f"{title}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📈 <b>{real_name}</b> <code>({symbol})</code>\n"
+        f"{direction_text} · <b>{to_small_caps('ENTRY')}:</b> <code>{entry:.5g}</code>\n"
+        f"{price_line}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{footer}\n"
+    )
+    await send_message(msg, session)
+
+
+async def check_signal_outcomes(session):
+    """Scan M5 candles since each open signal's entry to detect TP1 / TP2 / SL hits."""
+    global active_signals
+    if not active_signals:
+        return
+
+    now_utc = datetime.now(timezone.utc)
+
+    for symbol in list(active_signals.keys()):
+        trade = active_signals[symbol]
+        sig = trade["signal"]
+        direction = sig["direction"]
+        tp1, tp2, stop = sig["tp1"], sig["tp2"], sig["stop"]
+        entry_epoch = trade["entry_epoch"]
+
+        # Safety: expire trades older than 24h so a stuck symbol can't block new signals
+        if (now_utc - trade["created_at"]).total_seconds() > 24 * 3600:
+            logging.info(f"⌛ Expiring stale signal for {symbol} after 24h.")
+            del active_signals[symbol]
+            continue
+
+        m5 = await fetch(symbol, M5_GRAN, 100)
+        if m5.empty:
+            continue
+
+        # Only CLOSED M5 candles, and only those formed at/after entry time
+        m5_closed = m5.iloc[:-1]
+        recent = m5_closed[m5_closed["epoch"] >= entry_epoch].reset_index(drop=True)
+        if recent.empty:
+            continue
+
+        finished = False
+        for _, c in recent.iterrows():
+            o, h, l, cl = float(c["open"]), float(c["high"]), float(c["low"]), float(c["close"])
+
+            if direction == 1:  # long
+                sl_hit  = l <= stop
+                tp1_hit = h >= tp1
+                tp2_hit = h >= tp2
+            else:               # short
+                sl_hit  = h >= stop
+                tp1_hit = l <= tp1
+                tp2_hit = l <= tp2
+
+            # Heuristic for ambiguous candles (both TP and SL touched within same M5):
+            # long  + bullish candle  → low formed first  → SL first
+            # long  + bearish candle  → high formed first → TP first
+            # short + bullish candle  → low formed first  → TP first
+            # short + bearish candle  → high formed first → SL first
+            tp_first = (direction == 1 and cl < o) or (direction == -1 and cl > o)
+
+            if tp_first:
+                events = []
+                if tp1_hit: events.append("tp1")
+                if tp2_hit: events.append("tp2")
+                if sl_hit:  events.append("sl")
+            else:
+                events = []
+                if sl_hit:  events.append("sl")
+                if tp1_hit: events.append("tp1")
+                if tp2_hit: events.append("tp2")
+
+            for ev in events:
+                if ev == "sl":
+                    tag = "sl_after_tp1" if trade["tp1_done"] else "sl"
+                    await send_outcome_message(symbol, sig, tag, session)
+                    logging.info(f"📣 {symbol} SL hit → removed from active.")
+                    finished = True
+                    break
+                elif ev == "tp1" and not trade["tp1_done"]:
+                    trade["tp1_done"] = True
+                    await send_outcome_message(symbol, sig, "tp1", session)
+                    logging.info(f"📣 {symbol} TP1 hit.")
+                elif ev == "tp2" and not trade["tp2_done"]:
+                    trade["tp2_done"] = True
+                    await send_outcome_message(symbol, sig, "tp2", session)
+                    logging.info(f"📣 {symbol} TP2 hit → removed from active.")
+                    finished = True
+                    break
+
+            if finished:
+                break
+
+        if finished:
+            del active_signals[symbol]
+
+
 # ============================================================
 # BACKGROUND TRADING TASK
 # ============================================================
 async def run_trading_loop():
-    global last_summary_date
+    global last_summary_date, active_signals, last_signal_epoch
     logging.info("🚀 Trading loop started. Checking every 15 minutes.")
     while True:
         try:
@@ -406,6 +542,10 @@ async def run_trading_loop():
                 last_summary_date = current_date
 
             async with aiohttp.ClientSession() as session:
+                # 1) First check TP/SL outcomes on any currently open signals
+                await check_signal_outcomes(session)
+
+                # 2) Then scan for fresh signals
                 for symbol in SYMBOLS:
                     h1 = await fetch(symbol, H1_GRAN, 500)
                     m15 = await fetch(symbol, M15_GRAN, 500)
@@ -413,7 +553,26 @@ async def run_trading_loop():
                     if h1.empty or m15.empty or m5.empty: continue
                     signal = evaluate_symbol(symbol, h1, m15, m5)
                     if signal:
-                        await send_signal(symbol, signal, session)
+                        # Deduplicate: skip if this is the same M15 candle we already alerted on
+                        if last_signal_epoch.get(symbol) == signal["epoch"]:
+                            logging.info(
+                                f"⏭️ Duplicate signal for {symbol} on candle "
+                                f"{signal['epoch']} — already sent, skipping."
+                            )
+                        elif symbol in active_signals:
+                            logging.info(f"⏳ {symbol} already has an open trade — skipping new signal.")
+                        else:
+                            await send_signal(symbol, signal, session)
+                            last_signal_epoch[symbol] = signal["epoch"]
+                            active_signals[symbol] = {
+                                "signal": signal,
+                                # M15 candle with epoch E closes at E+900; that's when the trade "starts"
+                                "entry_epoch": signal["epoch"] + M15_GRAN,
+                                "tp1_done": False,
+                                "tp2_done": False,
+                                "created_at": now_utc,
+                            }
+                            logging.info(f"🆕 Active trade opened for {symbol} (candle {signal['epoch']}).")
                     else:
                         logging.info(f"✅ No signal for {symbol}")
         except Exception as e:
